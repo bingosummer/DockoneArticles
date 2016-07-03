@@ -516,15 +516,71 @@ Mesos Agent会配置成使用非临时（non-ephemeral）端口31000-32000,临�
 
 Nomad是HashiCorp开发的集群调度器，HashiCorp也开发了Vagrant。Nomad于2015年9月份引入，主要目的是简化性。Nomad易于安装和使用。据说，它的调度器设计受到Google的Omega的影响，比如维护了集群的全局状态、使用优化的、高并发的调度器。
 
-Nomad的架构是基于agent的，它有一个单独的二进制文件，可以承担不同的角色，支持滚动升级（rolling upgrade）和draining nodes（为了重新平衡）。对于所有的状态复制和调度，Nomad使用了一致性协议（强一致性）；而对于
+Nomad的架构是基于agent的，它有一个单独的二进制文件，可以承担不同的角色，支持滚动升级（rolling upgrade）和draining nodes（为了重新平衡）。Nomad使用了一致性协议（强一致性）来实现所有的状态复制和调度，使用gossip协议来管理服务器地址，从而实现集群自动化（automatic clustering）和多区域联合（multiregion federation）。从图5-9可以看到，Nomad agent正在启动。
+
+Jobs定义为HCL格式（HashiCorp-proprietary format）或JSON格式。Nomad提供了命令行接口和HTTP API，来和服务器进程进行交互。
+
+接下来，我假设你已经熟悉了Nomad和它的术语，否则我不建议你读这一节。如果你不熟悉的话，我建议你读一下Nomad: A Distributed, Optimistically Concurrent Schedule: Armon Dadgar, HashiCorp（这是HashiCorp的CTO Armon Dadgar对于Nomad的介绍）和Nomad的文档。
 
 ###### 网络
 
+Nomad中有几个所谓的任务驱动（task drivers），从通用的Java可执行程序到qemu和Docker。在之后的讨论中，我们将会专注后者。
+
+在写这篇文章的时候，Nomad要求Docker的版本为1.8.2，并使用端口绑定技术，将容器中运行的服务暴露在宿主机网卡接口的端口空间中。Nomad提供了自动的和手动的映射方案，绑定Docker容器的TCP和UDP协议端口。
+
+关于网络选项的更多细节，例如端口映射（mapping ports）和标签（labels），我建议你读一下该文章。
+
 ###### 服务发现
+
+在v0.2中，Nomad提供了基于Consul的服务发现机制，请参考相关文档。其中包含了健康检查（health checks），并假设运行在Nomad中的任务能够与Consul agent通信（使用bridge模式网络），这是一个挑战。
 
 ##### 我应该用哪个呢？
 
+以下内容当然只是我的一个建议。这是基于我的经验，自然地，我也偏向于我正在使用的东西。可能有各种原因（包括政治上的原因）导致你选择一个特定的技术。
+
+从纯粹的可扩展性的角度来看，这些选项有以下特点：
+
+对于少量的节点来说，自然是无所谓的：根据你的偏好和经验，选择以上四个选项中的任意一个都可以。但是请记住，管理大规模的容器是很困难的：
+
+  * Docker Swarm可以管理1000个节点，请参考HackerNews和Docker的这篇博客。
+  * Kubernetes 1.0据说可以扩展至100个节点，并在持续改进中，以达到和Apache Mesos同样的可扩展性。
+  * Apache Mesos可以管理最多50000个节点。
+  * 到目前为止，还没有资料表明Nomad可以管理多少个节点。
+
+从工作负载的角度来看，这些选项有以下特点：
+
+非容器化（Non-containerized)意味着你可以运行任何Linux Shell中可以运行的程序，例如bash或Python脚本、Java程序等。容器化（containerized）以为你需要生成一个Docker镜像。考虑到有状态服务，当今应用中的很大一部分需要一些调整。如果你想更多地学习编排工具，请参考：
+
+  * Docker Clustering Tools Compared: Kubernetes vs Docker Swarm
+  * O'Reilly Radar的Swarm v. Fleet v. Kubernetes v. Mesos
+
+为了完整性，我想介绍这个领域的一个新成员Firmament，这是一个非常不错的项目。这个项目的开发者们也是Google的Omega和Borg的贡献者，这个新的调度器将任务和机器组成了一个流网络，并运行最小成本优化（minimum-cost optimization）。特别有趣的一点是，Firmament不仅可以单独使用，也可以与Kubernetes和Mesos整合。
+
 ###### 容器的一天
+
+当选择使用哪种容器编排方案时，你需要考虑容器的整个生命流程。
+
+Docker容器典型的生命周期包括以下几个阶段：
+
+阶段1： dev
+
+	容器镜像（你的服务和应用）从一个开发环境中开始它的生命流程，通常是从一名开发者的笔记本开始的。你可以使用生产环境中运行的服务和应用的特性请求（feature requests）作为输入。
+
+阶段2： CI/CD
+
+	然后，容器需要经历持续集成和持续发布（continuous integration and continous delivery），包括单元测试、整合测试和冒烟测试。
+
+阶段3： QA/staging
+
+	然后，你可以使用一个QA环境（企业内部或云中的集群）和/或staging阶段。
+
+阶段4: prod
+
+	最后，容器镜像是部署到生产环境中的。你也需要有一个策略去分发这些镜像。不要忘记以canaries的方式进行构建，并为核心系统（如Apache Mesos）、潜在的高层组件（如Marathon）和你的服务和应用的滚动式升级（rolling upgrade）做计划。
+
+	在生产环境中，你会发现bugs，并收集相关指标，可以用来改善下一个迭代（返回到阶段1）。
+
+这里讨论的大部分系统（Swarm、Kubernetes、Mesos和Nomad）提供了很多指令、协议和整合点来覆盖这些阶段。然而，在你选择任何一个系统之前，你仍然需要端到端地试用该系统。
 
 ###### 社区是很重要的
 
